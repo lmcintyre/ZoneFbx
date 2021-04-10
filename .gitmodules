@@ -1,0 +1,3 @@
+[submodule "Lumina"]
+	path = Lumina
+	url = https://github.com/NotAdam/Lumina.git
