@@ -118,6 +118,55 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
             object_node->AddChild(model_node);
             layer_node->AddChild(object_node);
         }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::LayLight)
+        {
+            auto light_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::LightInstanceObject^>(object->Object);
+
+            auto light_node = FbxLight::Create(object_node, Util::get_std_str(object->Name + "_light").c_str());
+            switch (light_object->LightType)
+            {
+            case Lumina::Data::Parsing::Layer::LightType::Directional:
+                light_node->LightType = FbxLight::EType::eDirectional;
+                break;
+            case Lumina::Data::Parsing::Layer::LightType::Point:
+                light_node->LightType = FbxLight::EType::ePoint;
+                break;
+            case Lumina::Data::Parsing::Layer::LightType::Spot:
+                light_node->LightType = FbxLight::EType::eSpot;
+                break;
+            default:
+                light_node->LightType = FbxLight::EType::eArea;
+                break;
+            }
+            light_node->CastLight = true;
+            light_node->CastShadows = light_object->BGShadowEnabled == 1;
+            light_node->Color = { light_object->DiffuseColorHDRI.Red / 255.f, light_object->DiffuseColorHDRI.Green / 255.f, light_object->DiffuseColorHDRI.Blue / 255.f };
+            light_node->DecayStart = (double)light_object->RangeRate;
+            light_node->DecayType = FbxLight::EDecayType::eCubic;
+            light_node->EnableFarAttenuation = true;
+            light_node->EnableNearAttenuation = true;
+            light_node->InnerAngle = (double)light_object->ConeDegree;
+            light_node->NearAttenuationEnd = (double)light_object->RangeRate;
+            
+            object_node->SetNodeAttribute(light_node);
+            layer_node->AddChild(object_node);
+            //System::Console::WriteLine("Cone degree {0}, Attenuation {1} RangeRate {2}", light_object->ConeDegree, light_object->Attenuation, light_object->RangeRate);
+        }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::VFX)
+        {
+            auto vfx_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::VFXInstanceObject^>(object->Object);
+
+            auto light_node = FbxLight::Create(object_node, Util::get_std_str(object->Name + "_vfx").c_str());
+            light_node->NearAttenuationStart = (double)vfx_object->FadeNearStart;
+            light_node->NearAttenuationEnd = (double)vfx_object->FadeNearEnd;
+            light_node->FarAttenuationStart = (double)vfx_object->FadeFarStart;
+            light_node->FarAttenuationEnd = (double)vfx_object->FadeFarEnd;
+            light_node->Color = { vfx_object->Color.Red / 255.f, vfx_object->Color.Green / 255.f, vfx_object->Color.Blue / 255.f };
+            light_node->CastLight = vfx_object->IsAutoPlay == 1;
+
+            object_node->SetNodeAttribute(light_node);
+            layer_node->AddChild(object_node);
+        }
         else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::SharedGroup)
         {
             auto shared_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::SharedGroupInstanceObject^>(object->Object);
