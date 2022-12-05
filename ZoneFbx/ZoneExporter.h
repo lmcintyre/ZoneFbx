@@ -24,6 +24,7 @@ private:
     bool process_terrain();
     bool process_bg();
     void process_model(Lumina::Models::Models::Model^ model, FbxNode** node);
+    void process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Layer^ layer, FbxNode* parentNode = nullptr);
     bool init(System::String^);
     FbxMesh* create_mesh(Lumina::Models::Models::Mesh^, const char*);
     bool create_material(Lumina::Models::Materials::Material^ mat, FbxSurfacePhong** out);

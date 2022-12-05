@@ -86,50 +86,75 @@ bool ZoneExporter::process_terrain()
     return true;
 }
 
+
+void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Layer^ layer, FbxNode* parent_node)
+{
+    auto layer_node = parent_node ? parent_node : FbxNode::Create(scene, Util::get_std_str(layer->Name).c_str());
+    
+    for (int j = 0; j < layer->InstanceObjects->Length; j++)
+    {
+        auto object = % layer->InstanceObjects[j];
+        auto object_node = FbxNode::Create(scene, Util::get_std_str(object->Name).c_str());
+
+        object_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
+        object_node->LclRotation.Set(FbxDouble3(Util::degrees(object->Transform.Rotation.X),
+            Util::degrees(object->Transform.Rotation.Y),
+            Util::degrees(object->Transform.Rotation.Z)));
+        object_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
+
+        if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::BG)
+        {
+            auto instance_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::BGInstanceObject^>(object->Object);
+            auto object_path = instance_object->AssetPath;
+            auto model = gcnew Lumina::Models::Models::Model(data, object_path, Lumina::Models::Models::Model::ModelLod::High, 1);
+
+            auto model_node = FbxNode::Create(scene, Util::get_std_str(object_path->Substring(object_path->LastIndexOf('/') + 1)).c_str());
+            // model_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
+            // model_node->LclRotation.Set(FbxDouble3(object->Transform.Rotation.X, object->Transform.Rotation.Y, object->Transform.Rotation.Z));
+            // model_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
+
+            process_model(model, &model_node);
+
+            object_node->AddChild(model_node);
+            layer_node->AddChild(object_node);
+        }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::SharedGroup)
+        {
+            auto shared_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::SharedGroupInstanceObject^>(object->Object);
+            auto shared_path = shared_object->AssetPath;
+            auto shared_file = data->GetFile<Lumina::Data::Files::SgbFile^>(shared_path);
+
+            for (auto k = 0; k < shared_file->LayerGroups->Length; ++k)
+            {
+                auto group = shared_file->LayerGroups[k];
+                for (auto l = 0; l < group.Layers->Length; ++l)
+                {
+                    auto sgbLayer = group.Layers[l];
+                    process_layer(sgbLayer, object_node);
+                }
+            }
+            layer_node->AddChild(object_node);
+            System::Console::WriteLine(shared_path);
+        }
+    }
+    scene->GetRootNode()->AddChild(layer_node);
+}
+
 bool ZoneExporter::process_bg()
 {
-    auto bg_path = "bg/" + Util::get_str_handle(zone_path.substr(0, zone_path.length() - 5)) + "/bg.lgb";
+    auto bg_path = "bg/" + Util::get_str_handle(zone_path.substr(0, zone_path.length() - 5)) + "level/bg.lgb";
     auto bg = data->GetFile<Lumina::Data::Files::LgbFile^>(bg_path);
 
+    
     if (bg == nullptr)
         return false;
 
-    for(int i = 0; i < bg->Layers->Length; i++)
+    for (int i = 0; i < bg->Layers->Length; i++)
     {
-        auto layer = %bg->Layers[i];
-        auto layer_node = FbxNode::Create(scene, Util::get_std_str(layer->Name).c_str());
-        
-        for (int j = 0; j < layer->InstanceObjects->Length; j++)
-        {
-            auto object = %layer->InstanceObjects[j];
-            auto object_node = FbxNode::Create(scene, Util::get_std_str(object->Name).c_str());
-            
-            object_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
-            object_node->LclRotation.Set(FbxDouble3(Util::degrees(object->Transform.Rotation.X),
-                                                    Util::degrees(object->Transform.Rotation.Y),
-                                                    Util::degrees(object->Transform.Rotation.Z)));
-            object_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
-            
-            if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::BG)
-            {
-                auto instance_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::BGInstanceObject^>(object->Object);
-                auto object_path = instance_object->AssetPath;
-                auto model = gcnew Lumina::Models::Models::Model(data, object_path, Lumina::Models::Models::Model::ModelLod::High, 1);
-                
-                auto model_node = FbxNode::Create(scene, Util::get_std_str(object_path->Substring(object_path->LastIndexOf('/') + 1)).c_str());
-                // model_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
-                // model_node->LclRotation.Set(FbxDouble3(object->Transform.Rotation.X, object->Transform.Rotation.Y, object->Transform.Rotation.Z));
-                // model_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
-                
-                process_model(model, &model_node);
-
-                object_node->AddChild(model_node);
-                layer_node->AddChild(object_node);
-            }
-        }
-        scene->GetRootNode()->AddChild(layer_node);
+        auto layer = bg->Layers[i];
+        auto layer_node = FbxNode::Create(scene, Util::get_std_str(layer.Name).c_str());
+        process_layer(layer, layer_node);
     }
-    
     return true;
 }
 
