@@ -86,7 +86,7 @@ bool ZoneExporter::process_terrain()
     return true;
 }
 
-System::String^ ZoneExporter::get_eobj_sgb_path(System::UInt32 instance_id)
+System::String^ ZoneExporter::get_eobj_sgb_path(System::UInt32 eobj_id)
 {
     if (eobj_sgb_paths->Count == 0)
     {
@@ -109,7 +109,22 @@ System::String^ ZoneExporter::get_eobj_sgb_path(System::UInt32 instance_id)
         }
     }
     System::String^ ret;
-    eobj_sgb_paths->TryGetValue(instance_id, ret);
+    eobj_sgb_paths->TryGetValue(eobj_id, ret);
+    return ret;
+}
+
+System::String^ ZoneExporter::get_eobj_name(System::UInt32 eobj_id)
+{
+    if (eobj_names->Count == 0)
+    {
+        auto eobj_name_sheet = data->Excel->GetSheetRaw("EObjName");
+
+        for each (Lumina::Excel::RowParser ^ row in eobj_name_sheet->EnumerateRowParsers())
+            if (!eobj_names->ContainsKey(row->Row))
+                eobj_names->Add(row->Row, row->ReadColumn<System::String^>(0));
+    }
+    System::String^ ret;
+    eobj_names->TryGetValue(eobj_id, ret);
     return ret;
 }
 
@@ -214,6 +229,10 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
         {
             auto event_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::EventInstanceObject^>(object->Object);
             auto shared_path = get_eobj_sgb_path(event_object->ParentData.BaseId);
+
+            // read the eobj name from exd
+            object_node->SetName(Util::get_std_str(get_eobj_name(event_object->ParentData.BaseId)).c_str());
+
             if (shared_path != nullptr)
             {
                 auto shared_file = data->GetFile<Lumina::Data::Files::SgbFile^>(shared_path);
@@ -531,6 +550,7 @@ bool ZoneExporter::init(System::String^ game_path)
     data = gcnew Lumina::GameData(game_path, gcnew Lumina::LuminaOptions());
     data->Options->PanicOnSheetChecksumMismatch = false; // probably haraam
     eobj_sgb_paths = gcnew System::Collections::Generic::Dictionary<System::UInt32, System::String^>();
+    eobj_names = gcnew System::Collections::Generic::Dictionary<System::UInt32, System::String^>();
 
     auto name = zone_path.substr(zone_path.rfind("/level") - 4, 4);
 
