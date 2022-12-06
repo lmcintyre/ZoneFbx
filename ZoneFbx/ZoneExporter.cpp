@@ -86,7 +86,6 @@ bool ZoneExporter::process_terrain()
     return true;
 }
 
-
 void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Layer^ layer, FbxNode* parent_node)
 {
     auto layer_node = parent_node ? parent_node : FbxNode::Create(scene, Util::get_std_str(layer->Name).c_str());
@@ -134,20 +133,30 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
             case Lumina::Data::Parsing::Layer::LightType::Spot:
                 light_node->LightType = FbxLight::EType::eSpot;
                 break;
-            default:
+            case Lumina::Data::Parsing::Layer::LightType::Plane:
                 light_node->LightType = FbxLight::EType::eArea;
+                light_node->AreaLightShape = FbxLight::EAreaLightShape::eRectangle;
+            default:
+                light_node->LightType = FbxLight::EType::ePoint;
                 break;
             }
-            light_node->CastLight = true;
-            light_node->CastShadows = light_object->BGShadowEnabled == 1;
-            light_node->Color = { light_object->DiffuseColorHDRI.Red / 255.f, light_object->DiffuseColorHDRI.Green / 255.f, light_object->DiffuseColorHDRI.Blue / 255.f };
-            light_node->DecayStart = (double)light_object->RangeRate;
-            light_node->DecayType = FbxLight::EDecayType::eCubic;
-            light_node->EnableFarAttenuation = true;
-            light_node->EnableNearAttenuation = true;
-            light_node->InnerAngle = (double)light_object->ConeDegree;
-            light_node->NearAttenuationEnd = (double)light_object->RangeRate;
-            
+            light_node->Intensity.Set((double)light_object->DiffuseColorHDRI.Intensity * 100.0);
+            light_node->CastLight.Set(true);
+            light_node->CastShadows.Set(light_object->BGShadowEnabled != 0);
+            light_node->Color.Set({ light_object->DiffuseColorHDRI.Red / 255.f, light_object->DiffuseColorHDRI.Green / 255.f, light_object->DiffuseColorHDRI.Blue / 255.f });
+            light_node->DecayStart.Set((double)light_object->RangeRate + 25.);
+            light_node->DecayType.Set(FbxLight::EDecayType::eCubic);
+            light_node->EnableFarAttenuation.Set(true);
+            light_node->EnableNearAttenuation.Set(true);
+            light_node->InnerAngle.Set(0.0);
+            light_node->OuterAngle.Set((double)light_object->ConeDegree);
+
+            object_node->LclRotation.Set(FbxDouble3(
+                object_node->LclRotation.Get().mData[0] - 90.,
+                object_node->LclRotation.Get().mData[1],
+                object_node->LclRotation.Get().mData[2]
+            ));
+
             object_node->SetNodeAttribute(light_node);
             layer_node->AddChild(object_node);
             //System::Console::WriteLine("Cone degree {0}, Attenuation {1} RangeRate {2}", light_object->ConeDegree, light_object->Attenuation, light_object->RangeRate);
@@ -157,14 +166,44 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
             auto vfx_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::VFXInstanceObject^>(object->Object);
 
             auto light_node = FbxLight::Create(object_node, Util::get_std_str(object->Name + "_vfx").c_str());
-            light_node->NearAttenuationStart = (double)vfx_object->FadeNearStart;
-            light_node->NearAttenuationEnd = (double)vfx_object->FadeNearEnd;
-            light_node->FarAttenuationStart = (double)vfx_object->FadeFarStart;
-            light_node->FarAttenuationEnd = (double)vfx_object->FadeFarEnd;
-            light_node->Color = { vfx_object->Color.Red / 255.f, vfx_object->Color.Green / 255.f, vfx_object->Color.Blue / 255.f };
-            light_node->CastLight = vfx_object->IsAutoPlay == 1;
+            light_node->NearAttenuationStart.Set((double)vfx_object->FadeNearStart);
+            light_node->NearAttenuationEnd.Set((double)vfx_object->FadeNearEnd);
+            light_node->FarAttenuationStart.Set((double)vfx_object->FadeFarStart);
+            light_node->FarAttenuationEnd.Set((double)vfx_object->FadeFarEnd);
+            light_node->Color.Set({ vfx_object->Color.Red / 255.f, vfx_object->Color.Green / 255.f, vfx_object->Color.Blue / 255.f });
+            light_node->CastLight.Set(vfx_object->IsAutoPlay != 0);
+            light_node->DecayStart.Set(25.f + vfx_object->SoftParticleFadeRange);
+
+            object_node->LclRotation.Set(FbxDouble3(
+                object_node->LclRotation.Get().mData[0] - 90.,
+                object_node->LclRotation.Get().mData[1],
+                object_node->LclRotation.Get().mData[2]
+            ));
 
             object_node->SetNodeAttribute(light_node);
+            layer_node->AddChild(object_node);
+        }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::EventObject)
+        {
+            auto event_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::EventInstanceObject^>(object->Object);
+            auto event_object_sheet = data->GetExcelSheet<Lumina::Excel::GeneratedSheets::EObj^>();
+            
+            for each (Lumina::Excel::GeneratedSheets::EObj^ row in event_object_sheet)
+            {
+                if (row->RowId == object->InstanceId)
+                {
+                    auto shared_file = data->GetFile<Lumina::Data::Files::SgbFile^>(row->SgbPath->Value->SgbPath);
+                    for (auto k = 0; k < shared_file->LayerGroups->Length; ++k)
+                    {
+                        auto group = shared_file->LayerGroups[k];
+                        for (auto l = 0; l < group.Layers->Length; ++l)
+                        {
+                            auto sgbLayer = group.Layers[l];
+                            process_layer(sgbLayer, object_node);
+                        }
+                    }
+                }
+            }
             layer_node->AddChild(object_node);
         }
         else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::SharedGroup)
@@ -191,18 +230,22 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
 
 bool ZoneExporter::process_bg()
 {
-    auto bg_path = "bg/" + Util::get_str_handle(zone_path.substr(0, zone_path.length() - 5)) + "level/bg.lgb";
-    auto bg = data->GetFile<Lumina::Data::Files::LgbFile^>(bg_path);
-
+    auto bg_path = "bg/" + Util::get_str_handle(zone_path.substr(0, zone_path.length() - 5)) + "level/";
+    std::vector<std::string> paths = { "bg.lgb", "planmap.lgb", "planevent.lgb" };
     
-    if (bg == nullptr)
-        return false;
-
-    for (int i = 0; i < bg->Layers->Length; i++)
+    for (auto path : paths)
     {
-        auto layer = bg->Layers[i];
-        auto layer_node = FbxNode::Create(scene, Util::get_std_str(layer.Name).c_str());
-        process_layer(layer, layer_node);
+        auto bg = data->GetFile<Lumina::Data::Files::LgbFile^>(bg_path + gcnew System::String(path.c_str()));
+
+        if (bg == nullptr)
+            return false;
+
+        for (int i = 0; i < bg->Layers->Length; i++)
+        {
+            auto layer = bg->Layers[i];
+            auto layer_node = FbxNode::Create(scene, Util::get_std_str(layer.Name).c_str());
+            process_layer(layer, layer_node);
+        }
     }
     return true;
 }
@@ -342,8 +385,17 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
     (*out)->AmbientFactor.Set(1.);
     (*out)->DiffuseFactor.Set(1.);
     (*out)->SpecularFactor.Set(0.3);
+    (*out)->BumpFactor.Set(0.3);
 
     (*out)->ShadingModel.Set("Phong");
+
+    std::map<std::string, std::vector<FbxTexture*>> textures;
+    auto fbx_textures = std::map<std::string, FbxPropertyT<FbxDouble3>*>
+    {
+        {"diffuse", &(*out)->Diffuse},
+        {"specular", &(*out)->Specular},
+        {"normal", &(*out)->NormalMap}
+    };
 
     for (int i = 0; i < mat->Textures->Length; i++)
     {
@@ -363,21 +415,45 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
         texture->SetScale(1.0, 1.0);
         texture->SetRotation(0.0, 0.0);
 
-        // We are ignoring the 2nd texture that they use for blending
+        // We are ignoring the 2nd texture that they use for blending // LIES LIES LIES
         switch (mat->Textures[i]->TextureUsageRaw)
         {
-            case Lumina::Data::Parsing::TextureUsage::SamplerColorMap0: (*out)->Diffuse.ConnectSrcObject(texture); break;
-            case Lumina::Data::Parsing::TextureUsage::SamplerSpecularMap0: (*out)->Specular.ConnectSrcObject(texture); break;
+            case Lumina::Data::Parsing::TextureUsage::SamplerColorMap0:
+            case Lumina::Data::Parsing::TextureUsage::SamplerColorMap1:
+            case Lumina::Data::Parsing::TextureUsage::Sampler0:
+            case Lumina::Data::Parsing::TextureUsage::Sampler1:
+                textures["diffuse"].push_back(texture); break;
+            case Lumina::Data::Parsing::TextureUsage::SamplerSpecularMap0:
+            case Lumina::Data::Parsing::TextureUsage::SamplerSpecularMap1:
+                textures["specular"].push_back(texture); break;
             case Lumina::Data::Parsing::TextureUsage::SamplerNormalMap0:
-                (*out)->NormalMap.ConnectSrcObject(texture);
-                break;
+            case Lumina::Data::Parsing::TextureUsage::SamplerNormalMap1:
+                textures["normal"].push_back(texture); break;
             default: ;
         }
     }
 
+    // thanks azurerain1
+    for (const auto& slot : textures)
+    {
+        if (slot.second.size() > 1)
+        {
+            auto layered_texture = FbxLayeredTexture::Create(scene, (std_material_name + "_layered_texture_group").c_str());
+            for (int i = 0; i < slot.second.size(); ++i)
+            {
+                layered_texture->ConnectSrcObject(slot.second[i]);
+                layered_texture->SetTextureBlendMode(i, FbxLayeredTexture::EBlendMode::eAdditive);
+            }
+            fbx_textures[slot.first]->ConnectSrcObject(layered_texture);
+        }
+        else if (!slot.second.empty())
+        {
+            fbx_textures[slot.first]->ConnectSrcObject(slot.second[0]);
+        }
+    }
+
+
     material_cache->insert({hash, *out});
-
-
     return true;
 }
 
@@ -427,6 +503,8 @@ bool ZoneExporter::save_scene()
 bool ZoneExporter::init(System::String^ game_path)
 {
     data = gcnew Lumina::GameData(game_path, gcnew Lumina::LuminaOptions());
+    data->Options->PanicOnSheetChecksumMismatch = false; // probably haraam
+
     auto name = zone_path.substr(zone_path.rfind("/level") - 4, 4);
 
     manager = FbxManager::Create();
@@ -447,7 +525,8 @@ bool ZoneExporter::init(System::String^ game_path)
     (*manager->GetIOSettings()).SetBoolProp(EXP_FBX_GOBO, true);
     (*manager->GetIOSettings()).SetBoolProp(EXP_FBX_ANIMATION, false);
     (*manager->GetIOSettings()).SetBoolProp(EXP_FBX_GLOBAL_SETTINGS, true);
-
+    
+    scene->GetGlobalSettings().SetSystemUnit(FbxSystemUnit::m);
     return true;
 }
 
