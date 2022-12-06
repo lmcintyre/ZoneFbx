@@ -86,6 +86,33 @@ bool ZoneExporter::process_terrain()
     return true;
 }
 
+System::String^ ZoneExporter::get_eobj_sgb_path(System::UInt32 instance_id)
+{
+    if (eobj_sgb_paths->Count == 0)
+    {
+        auto eobj_sheet = data->Excel->GetSheetRaw("EObj");
+        auto exported_sg_sheet = data->Excel->GetSheetRaw("ExportedSG");
+
+        auto exported_sg_paths = gcnew System::Collections::Generic::Dictionary<System::UInt16, System::String^>();
+
+        for each (Lumina::Excel::RowParser^ row in exported_sg_sheet->EnumerateRowParsers())
+            if (!exported_sg_paths->ContainsKey(row->Row))
+                exported_sg_paths->Add(row->Row, row->ReadColumn<System::String^>(0));
+
+        for each (Lumina::Excel::RowParser^ row in eobj_sheet->EnumerateRowParsers())
+        {
+            auto link = row->ReadColumn<System::UInt16>(11);
+            System::String^ out;
+            if (exported_sg_paths->TryGetValue(link, out))
+                if (!eobj_sgb_paths->ContainsKey(row->Row))
+                    eobj_sgb_paths->Add(row->Row, out);
+        }
+    }
+    System::String^ ret;
+    eobj_sgb_paths->TryGetValue(instance_id, ret);
+    return ret;
+}
+
 void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Layer^ layer, FbxNode* parent_node)
 {
     auto layer_node = parent_node ? parent_node : FbxNode::Create(scene, Util::get_std_str(layer->Name).c_str());
@@ -186,13 +213,12 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
         else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::EventObject)
         {
             auto event_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::EventInstanceObject^>(object->Object);
-            auto event_object_sheet = data->GetExcelSheet<Lumina::Excel::GeneratedSheets::EObj^>();
-            
-            for each (Lumina::Excel::GeneratedSheets::EObj^ row in event_object_sheet)
+            auto shared_path = get_eobj_sgb_path(event_object->ParentData.BaseId);
+            if (shared_path != nullptr)
             {
-                if (row->RowId == object->InstanceId)
+                auto shared_file = data->GetFile<Lumina::Data::Files::SgbFile^>(shared_path);
+                if (shared_file)
                 {
-                    auto shared_file = data->GetFile<Lumina::Data::Files::SgbFile^>(row->SgbPath->Value->SgbPath);
                     for (auto k = 0; k < shared_file->LayerGroups->Length; ++k)
                     {
                         auto group = shared_file->LayerGroups[k];
@@ -504,6 +530,7 @@ bool ZoneExporter::init(System::String^ game_path)
 {
     data = gcnew Lumina::GameData(game_path, gcnew Lumina::LuminaOptions());
     data->Options->PanicOnSheetChecksumMismatch = false; // probably haraam
+    eobj_sgb_paths = gcnew System::Collections::Generic::Dictionary<System::UInt32, System::String^>();
 
     auto name = zone_path.substr(zone_path.rfind("/level") - 4, 4);
 

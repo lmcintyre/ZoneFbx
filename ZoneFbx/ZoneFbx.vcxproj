@@ -182,9 +182,6 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Lumina\src\Lumina.Excel\Lumina.Excel.csproj">
-      <Project>{282304b1-36fa-4079-b54f-c0b11d270d92}</Project>
-    </ProjectReference>
     <ProjectReference Include="..\Lumina\src\Lumina\Lumina.csproj">
       <Project>{00f405fb-37d6-465d-b449-a5d2df9b77d1}</Project>
     </ProjectReference>
