@@ -1,6 +1,7 @@
 ﻿#include "pch.h"
 #include "ZoneExporter.h"
 
+#include <algorithm>
 #include <ostream>
 #include <msclr/marshal_cppstd.h>
 
@@ -191,7 +192,7 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
             light_node->EnableFarAttenuation.Set(true);
             light_node->EnableNearAttenuation.Set(true);
             light_node->InnerAngle.Set(0.0);
-            light_node->OuterAngle.Set((double)light_object->ConeDegree);
+            light_node->OuterAngle.Set((double)light_object->ConeDegree + 0.01f); // shitty div by 0 in blender
 
             object_node->LclRotation.Set(FbxDouble3(
                 object_node->LclRotation.Get().mData[0] - 90.,
@@ -431,15 +432,18 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
     (*out)->DiffuseFactor.Set(1.);
     (*out)->SpecularFactor.Set(0.3);
     (*out)->BumpFactor.Set(0.3);
+    (*out)->EmissiveFactor.Set(1.0);
 
     (*out)->ShadingModel.Set("Phong");
 
     std::map<std::string, std::vector<FbxTexture*>> textures;
     auto fbx_textures = std::map<std::string, FbxPropertyT<FbxDouble3>*>
     {
+        {"ambient", &(*out)->Ambient},
         {"diffuse", &(*out)->Diffuse},
         {"specular", &(*out)->Specular},
-        {"normal", &(*out)->NormalMap}
+        {"normal", &(*out)->NormalMap},
+        {"emissive", &(*out)->Emissive}
     };
 
     for (int i = 0; i < mat->Textures->Length; i++)
@@ -461,33 +465,26 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
         texture->SetRotation(0.0, 0.0);
 
         // We are ignoring the 2nd texture that they use for blending // LIES LIES LIES
-        switch (mat->Textures[i]->TextureUsageRaw)
+        switch (mat->Textures[i]->TextureUsageSimple)
         {
-            case Lumina::Data::Parsing::TextureUsage::SamplerColorMap0:
-            case Lumina::Data::Parsing::TextureUsage::SamplerColorMap1:
-            case Lumina::Data::Parsing::TextureUsage::Sampler0:
-            case Lumina::Data::Parsing::TextureUsage::Sampler1:
-                textures["diffuse"].push_back(texture); break;
-            case Lumina::Data::Parsing::TextureUsage::SamplerSpecularMap0:
-            case Lumina::Data::Parsing::TextureUsage::SamplerSpecularMap1:
-                textures["specular"].push_back(texture); break;
-            case Lumina::Data::Parsing::TextureUsage::SamplerNormalMap0:
-            case Lumina::Data::Parsing::TextureUsage::SamplerNormalMap1:
-                textures["normal"].push_back(texture); break;
-            default: ;
+            case Lumina::Models::Materials::Texture::Usage::Diffuse:  textures["diffuse"].push_back(texture); break;
+            case Lumina::Models::Materials::Texture::Usage::Specular: textures["specular"].push_back(texture); break;
+            case Lumina::Models::Materials::Texture::Usage::Normal:   textures["normal"].push_back(texture); break;
+            default: textures["ambient"].push_back(texture);      break;
         }
     }
 
     // thanks azurerain1
-    for (const auto& slot : textures)
+    for (auto& slot : textures)
     {
-        if (slot.second.size() > 1)
+        if (/*slot.second.size() > 1*/ false)
         {
             auto layered_texture = FbxLayeredTexture::Create(scene, (std_material_name + "_layered_texture_group").c_str());
             for (int i = 0; i < slot.second.size(); ++i)
             {
                 layered_texture->ConnectSrcObject(slot.second[i]);
                 layered_texture->SetTextureBlendMode(i, FbxLayeredTexture::EBlendMode::eAdditive);
+                layered_texture->SetTextureAlpha(i, 0.5);
             }
             fbx_textures[slot.first]->ConnectSrcObject(layered_texture);
         }
@@ -509,7 +506,7 @@ void ZoneExporter::extract_textures(Lumina::Models::Materials::Material^ mat)
     {
         auto tex_path = Util::get_texture_path(out_folder, zone_code, mat->Textures[i]->TexturePath);
 
-        if (System::IO::File::Exists(tex_path))
+        if (System::IO::File::Exists(tex_path) || tex_path->Contains("dummy"))
             continue;
 
         Lumina::Data::Files::TexFile^ texfile;
