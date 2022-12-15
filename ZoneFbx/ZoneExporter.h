@@ -32,7 +32,7 @@ private:
     bool init(System::String^);
     FbxMesh* create_mesh(Lumina::Models::Models::Mesh^, const char*);
     bool create_material(Lumina::Models::Materials::Material^ mat, FbxSurfacePhong** out);
-    void extract_textures(Lumina::Models::Materials::Material^ mat);
+    void extract_textures(Lumina::Models::Materials::Material^ mat, bool& out_found_emissive);
     bool save_scene();
     void uninit();
 };

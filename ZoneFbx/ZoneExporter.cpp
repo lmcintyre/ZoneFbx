@@ -157,6 +157,7 @@ void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Laye
 
             process_model(model, &model_node);
 
+            object_node->SetName(model_node->GetName());
             object_node->AddChild(model_node);
             layer_node->AddChild(object_node);
         }
@@ -425,14 +426,15 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
         *out = result->second;
         return true;
     }
-    extract_textures(mat);
+
+    bool found_emissive = false;
+    extract_textures(mat, found_emissive);
     *out = FbxSurfacePhong::Create(scene, std_material_name.c_str());
 
     (*out)->AmbientFactor.Set(1.);
     (*out)->DiffuseFactor.Set(1.);
     (*out)->SpecularFactor.Set(0.3);
     (*out)->BumpFactor.Set(0.3);
-    (*out)->EmissiveFactor.Set(1.0);
 
     (*out)->ShadingModel.Set("Phong");
 
@@ -468,8 +470,19 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
         switch (mat->Textures[i]->TextureUsageSimple)
         {
             case Lumina::Models::Materials::Texture::Usage::Diffuse:  textures["diffuse"].push_back(texture); break;
-            case Lumina::Models::Materials::Texture::Usage::Specular: textures["specular"].push_back(texture); break;
             case Lumina::Models::Materials::Texture::Usage::Normal:   textures["normal"].push_back(texture); break;
+            case Lumina::Models::Materials::Texture::Usage::Specular:
+            {
+               textures["specular"].push_back(texture);
+
+               if (found_emissive)
+               {
+                  //(*out)->EmissiveFactor.Set(1.0);
+                  //(*out)->Emissive.Set({ 1.0, 0.373, 0.255 });
+                  //textures["emissive"].push_back(texture);
+               }
+               break;
+            }
             default: textures["ambient"].push_back(texture);      break;
         }
     }
@@ -499,7 +512,7 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
     return true;
 }
 
-void ZoneExporter::extract_textures(Lumina::Models::Materials::Material^ mat)
+void ZoneExporter::extract_textures(Lumina::Models::Materials::Material^ mat, bool& out_found_emissive)
 {
     // I wish this was a C# function
     for (int i = 0; i < mat->Textures->Length; i++)
@@ -518,10 +531,29 @@ void ZoneExporter::extract_textures(Lumina::Models::Materials::Material^ mat)
             arr[i] = texfile->ImageData[i];
 
         System::Drawing::Image^ texture = gcnew System::Drawing::Bitmap(texfile->Header.Width,
-                                                                        texfile->Header.Height,
-                                                                        texfile->Header.Width * 4,
-                                                                        System::Drawing::Imaging::PixelFormat::Format32bppArgb,
-                                                                        System::IntPtr(arr));
+           texfile->Header.Height,
+           texfile->Header.Width * 4,
+           System::Drawing::Imaging::PixelFormat::Format32bppArgb,
+           System::IntPtr(arr));
+
+        if (tex_path->Contains("_s."))
+        {
+           for (int i = 0; i + 4 < texfile->ImageData->Length; i += 4)
+           {
+              uint32_t b = texfile->ImageData[i];
+              uint32_t g = texfile->ImageData[i + 1];
+              uint32_t r = texfile->ImageData[i + 2];
+              uint32_t a = texfile->ImageData[i + 3];
+
+              if (r == 0xFF && (g >= 80 && g < 100) && (b >= 60 && b < 85))
+              {
+                 System::Console::WriteLine("EMISSIVE: {0}", tex_path);
+                 out_found_emissive = true;
+                 break;
+              }
+           }
+        }
+
         System::IO::Directory::CreateDirectory(System::IO::Path::GetDirectoryName(tex_path));
         texture->Save(tex_path, System::Drawing::Imaging::ImageFormat::Png);
         delete[] arr;
