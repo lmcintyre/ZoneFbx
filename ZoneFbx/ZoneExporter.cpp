@@ -315,8 +315,8 @@ void ZoneExporter::process_model(Lumina::Models::Models::Model^ model, FbxNode**
         } else {
             mesh = create_mesh(model->Meshes[j], mesh_name.c_str());
             FbxSurfacePhong* material;
-            create_material(model->Meshes[j]->Material, &material);
-            mesh_node->AddMaterial(material);
+            if (create_material(model->Meshes[j]->Material, &material))
+               mesh_node->AddMaterial(material);
             mesh_cache->insert({mesh_name, mesh});
         }
         
@@ -418,6 +418,9 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
     auto mat_path = mat->MaterialPath;
     auto material_name = mat_path->Substring(mat_path->LastIndexOf('/') + 1);
     auto std_material_name = Util::get_std_str(material_name);
+
+    if (mat->File == nullptr)
+       return false;
 
     const auto hash = mat->File->FilePath->IndexHash;
     auto result = material_cache->find(hash);
