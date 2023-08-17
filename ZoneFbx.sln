@@ -4,8 +4,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 16.0.31129.286
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ZoneFbx", "ZoneFbx\ZoneFbx.vcxproj", "{44D3FB44-8DCC-42C8-A6FC-A387F6FE78B7}"
+	ProjectSection(ProjectDependencies) = postProject
+		{00F405FB-37D6-465D-B449-A5D2DF9B77D1} = {00F405FB-37D6-465D-B449-A5D2DF9B77D1}
+	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lumina", "Lumina\src\Lumina\Lumina.csproj", "{00F405FB-37D6-465D-B449-A5D2DF9B77D1}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Lumina", "Lumina\src\Lumina\Lumina.csproj", "{00F405FB-37D6-465D-B449-A5D2DF9B77D1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

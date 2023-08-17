@@ -1,6 +1,7 @@
 ﻿#include "pch.h"
 #include "ZoneExporter.h"
 
+#include <algorithm>
 #include <ostream>
 #include <msclr/marshal_cppstd.h>
 
@@ -86,50 +87,213 @@ bool ZoneExporter::process_terrain()
     return true;
 }
 
+System::String^ ZoneExporter::get_eobj_sgb_path(System::UInt32 eobj_id)
+{
+    if (eobj_sgb_paths->Count == 0)
+    {
+        auto eobj_sheet = data->Excel->GetSheetRaw("EObj");
+        auto exported_sg_sheet = data->Excel->GetSheetRaw("ExportedSG");
+
+        auto exported_sg_paths = gcnew System::Collections::Generic::Dictionary<System::UInt16, System::String^>();
+
+        for each (Lumina::Excel::RowParser^ row in exported_sg_sheet->EnumerateRowParsers())
+            if (!exported_sg_paths->ContainsKey(row->Row))
+                exported_sg_paths->Add(row->Row, row->ReadColumn<System::String^>(0));
+
+        for each (Lumina::Excel::RowParser^ row in eobj_sheet->EnumerateRowParsers())
+        {
+            auto link = row->ReadColumn<System::UInt16>(11);
+            System::String^ out;
+            if (exported_sg_paths->TryGetValue(link, out))
+                if (!eobj_sgb_paths->ContainsKey(row->Row))
+                    eobj_sgb_paths->Add(row->Row, out);
+        }
+    }
+    System::String^ ret;
+    eobj_sgb_paths->TryGetValue(eobj_id, ret);
+    return ret;
+}
+
+System::String^ ZoneExporter::get_eobj_name(System::UInt32 eobj_id)
+{
+    if (eobj_names->Count == 0)
+    {
+        auto eobj_name_sheet = data->Excel->GetSheetRaw("EObjName");
+
+        for each (Lumina::Excel::RowParser ^ row in eobj_name_sheet->EnumerateRowParsers())
+            if (!eobj_names->ContainsKey(row->Row))
+                eobj_names->Add(row->Row, row->ReadColumn<System::String^>(0));
+    }
+    System::String^ ret;
+    eobj_names->TryGetValue(eobj_id, ret);
+    return ret;
+}
+
+void ZoneExporter::process_layer(Lumina::Data::Parsing::Layer::LayerCommon::Layer^ layer, FbxNode* parent_node)
+{
+    auto layer_node = parent_node ? parent_node : FbxNode::Create(scene, Util::get_std_str(layer->Name).c_str());
+    
+    for (int j = 0; j < layer->InstanceObjects->Length; j++)
+    {
+        auto object = % layer->InstanceObjects[j];
+        auto object_node = FbxNode::Create(scene, Util::get_std_str(object->Name).c_str());
+
+        object_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
+        object_node->LclRotation.Set(FbxDouble3(Util::degrees(object->Transform.Rotation.X),
+            Util::degrees(object->Transform.Rotation.Y),
+            Util::degrees(object->Transform.Rotation.Z)));
+        object_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
+
+        if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::BG)
+        {
+            auto instance_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::BGInstanceObject^>(object->Object);
+            auto object_path = instance_object->AssetPath;
+            auto model = gcnew Lumina::Models::Models::Model(data, object_path, Lumina::Models::Models::Model::ModelLod::High, 1);
+
+            auto model_node = FbxNode::Create(scene, Util::get_std_str(object_path->Substring(object_path->LastIndexOf('/') + 1)).c_str());
+            // model_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
+            // model_node->LclRotation.Set(FbxDouble3(object->Transform.Rotation.X, object->Transform.Rotation.Y, object->Transform.Rotation.Z));
+            // model_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
+
+            process_model(model, &model_node);
+
+            object_node->SetName(model_node->GetName());
+            object_node->AddChild(model_node);
+            layer_node->AddChild(object_node);
+        }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::LayLight)
+        {
+            auto light_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::LightInstanceObject^>(object->Object);
+
+            auto light_node = FbxLight::Create(object_node, Util::get_std_str(object->Name + "_light").c_str());
+            switch (light_object->LightType)
+            {
+            case Lumina::Data::Parsing::Layer::LightType::Directional:
+                light_node->LightType = FbxLight::EType::eDirectional;
+                break;
+            case Lumina::Data::Parsing::Layer::LightType::Point:
+                light_node->LightType = FbxLight::EType::ePoint;
+                break;
+            case Lumina::Data::Parsing::Layer::LightType::Spot:
+                light_node->LightType = FbxLight::EType::eSpot;
+                break;
+            case Lumina::Data::Parsing::Layer::LightType::Plane:
+                light_node->LightType = FbxLight::EType::eArea;
+                light_node->AreaLightShape = FbxLight::EAreaLightShape::eRectangle;
+            default:
+                light_node->LightType = FbxLight::EType::ePoint;
+                break;
+            }
+            light_node->Intensity.Set((double)light_object->DiffuseColorHDRI.Intensity * 100.0);
+            light_node->CastLight.Set(true);
+            light_node->CastShadows.Set(light_object->BGShadowEnabled != 0);
+            light_node->Color.Set({ light_object->DiffuseColorHDRI.Red / 255.f, light_object->DiffuseColorHDRI.Green / 255.f, light_object->DiffuseColorHDRI.Blue / 255.f });
+            light_node->DecayStart.Set((double)light_object->RangeRate + 25.);
+            light_node->DecayType.Set(FbxLight::EDecayType::eCubic);
+            light_node->EnableFarAttenuation.Set(true);
+            light_node->EnableNearAttenuation.Set(true);
+            light_node->InnerAngle.Set(0.0);
+            light_node->OuterAngle.Set((double)light_object->ConeDegree + 0.01f); // shitty div by 0 in blender
+
+            object_node->LclRotation.Set(FbxDouble3(
+                object_node->LclRotation.Get().mData[0] - 90.,
+                object_node->LclRotation.Get().mData[1],
+                object_node->LclRotation.Get().mData[2]
+            ));
+
+            object_node->SetNodeAttribute(light_node);
+            layer_node->AddChild(object_node);
+            //System::Console::WriteLine("Cone degree {0}, Attenuation {1} RangeRate {2}", light_object->ConeDegree, light_object->Attenuation, light_object->RangeRate);
+        }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::VFX)
+        {
+            auto vfx_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::VFXInstanceObject^>(object->Object);
+
+            auto light_node = FbxLight::Create(object_node, Util::get_std_str(object->Name + "_vfx").c_str());
+            light_node->NearAttenuationStart.Set((double)vfx_object->FadeNearStart);
+            light_node->NearAttenuationEnd.Set((double)vfx_object->FadeNearEnd);
+            light_node->FarAttenuationStart.Set((double)vfx_object->FadeFarStart);
+            light_node->FarAttenuationEnd.Set((double)vfx_object->FadeFarEnd);
+            light_node->Color.Set({ vfx_object->Color.Red / 255.f, vfx_object->Color.Green / 255.f, vfx_object->Color.Blue / 255.f });
+            light_node->CastLight.Set(vfx_object->IsAutoPlay != 0);
+            light_node->DecayStart.Set(25.f + vfx_object->SoftParticleFadeRange);
+
+            object_node->LclRotation.Set(FbxDouble3(
+                object_node->LclRotation.Get().mData[0] - 90.,
+                object_node->LclRotation.Get().mData[1],
+                object_node->LclRotation.Get().mData[2]
+            ));
+
+            object_node->SetNodeAttribute(light_node);
+            layer_node->AddChild(object_node);
+        }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::EventObject)
+        {
+            auto event_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::EventInstanceObject^>(object->Object);
+            auto shared_path = get_eobj_sgb_path(event_object->ParentData.BaseId);
+
+            // read the eobj name from exd
+            object_node->SetName(Util::get_std_str(get_eobj_name(event_object->ParentData.BaseId)).c_str());
+
+            if (shared_path != nullptr)
+            {
+                auto shared_file = data->GetFile<Lumina::Data::Files::SgbFile^>(shared_path);
+                if (shared_file)
+                {
+                    for (auto k = 0; k < shared_file->LayerGroups->Length; ++k)
+                    {
+                        auto group = shared_file->LayerGroups[k];
+                        for (auto l = 0; l < group.Layers->Length; ++l)
+                        {
+                            auto sgbLayer = group.Layers[l];
+                            process_layer(sgbLayer, object_node);
+                        }
+                    }
+                }
+            }
+            layer_node->AddChild(object_node);
+        }
+        else if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::SharedGroup)
+        {
+            auto shared_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::SharedGroupInstanceObject^>(object->Object);
+            auto shared_path = shared_object->AssetPath;
+            auto shared_file = data->GetFile<Lumina::Data::Files::SgbFile^>(shared_path);
+
+            for (auto k = 0; k < shared_file->LayerGroups->Length; ++k)
+            {
+                auto group = shared_file->LayerGroups[k];
+                for (auto l = 0; l < group.Layers->Length; ++l)
+                {
+                    auto sgbLayer = group.Layers[l];
+                    process_layer(sgbLayer, object_node);
+                }
+            }
+            layer_node->AddChild(object_node);
+            System::Console::WriteLine(shared_path);
+        }
+    }
+    scene->GetRootNode()->AddChild(layer_node);
+}
+
 bool ZoneExporter::process_bg()
 {
-    auto bg_path = "bg/" + Util::get_str_handle(zone_path.substr(0, zone_path.length() - 5)) + "/bg.lgb";
-    auto bg = data->GetFile<Lumina::Data::Files::LgbFile^>(bg_path);
-
-    if (bg == nullptr)
-        return false;
-
-    for(int i = 0; i < bg->Layers->Length; i++)
-    {
-        auto layer = %bg->Layers[i];
-        auto layer_node = FbxNode::Create(scene, Util::get_std_str(layer->Name).c_str());
-        
-        for (int j = 0; j < layer->InstanceObjects->Length; j++)
-        {
-            auto object = %layer->InstanceObjects[j];
-            auto object_node = FbxNode::Create(scene, Util::get_std_str(object->Name).c_str());
-            
-            object_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
-            object_node->LclRotation.Set(FbxDouble3(Util::degrees(object->Transform.Rotation.X),
-                                                    Util::degrees(object->Transform.Rotation.Y),
-                                                    Util::degrees(object->Transform.Rotation.Z)));
-            object_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
-            
-            if (object->AssetType == Lumina::Data::Parsing::Layer::LayerEntryType::BG)
-            {
-                auto instance_object = static_cast<Lumina::Data::Parsing::Layer::LayerCommon::BGInstanceObject^>(object->Object);
-                auto object_path = instance_object->AssetPath;
-                auto model = gcnew Lumina::Models::Models::Model(data, object_path, Lumina::Models::Models::Model::ModelLod::High, 1);
-                
-                auto model_node = FbxNode::Create(scene, Util::get_std_str(object_path->Substring(object_path->LastIndexOf('/') + 1)).c_str());
-                // model_node->LclTranslation.Set(FbxDouble3(object->Transform.Translation.X, object->Transform.Translation.Y, object->Transform.Translation.Z));
-                // model_node->LclRotation.Set(FbxDouble3(object->Transform.Rotation.X, object->Transform.Rotation.Y, object->Transform.Rotation.Z));
-                // model_node->LclScaling.Set(FbxDouble3(object->Transform.Scale.X, object->Transform.Scale.Y, object->Transform.Scale.Z));
-                
-                process_model(model, &model_node);
-
-                object_node->AddChild(model_node);
-                layer_node->AddChild(object_node);
-            }
-        }
-        scene->GetRootNode()->AddChild(layer_node);
-    }
+    auto bg_path = "bg/" + Util::get_str_handle(zone_path.substr(0, zone_path.length() - 5)) + "level/";
+    std::vector<std::string> paths = { "bg.lgb", "planmap.lgb", "planevent.lgb" };
     
+    for (auto path : paths)
+    {
+        auto bg = data->GetFile<Lumina::Data::Files::LgbFile^>(bg_path + gcnew System::String(path.c_str()));
+
+        if (bg == nullptr)
+            return false;
+
+        for (int i = 0; i < bg->Layers->Length; i++)
+        {
+            auto layer = bg->Layers[i];
+            auto layer_node = FbxNode::Create(scene, Util::get_std_str(layer.Name).c_str());
+            process_layer(layer, layer_node);
+        }
+    }
     return true;
 }
 
@@ -151,8 +315,8 @@ void ZoneExporter::process_model(Lumina::Models::Models::Model^ model, FbxNode**
         } else {
             mesh = create_mesh(model->Meshes[j], mesh_name.c_str());
             FbxSurfacePhong* material;
-            create_material(model->Meshes[j]->Material, &material);
-            mesh_node->AddMaterial(material);
+            if (create_material(model->Meshes[j]->Material, &material))
+               mesh_node->AddMaterial(material);
             mesh_cache->insert({mesh_name, mesh});
         }
         
@@ -255,6 +419,9 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
     auto material_name = mat_path->Substring(mat_path->LastIndexOf('/') + 1);
     auto std_material_name = Util::get_std_str(material_name);
 
+    if (mat->File == nullptr)
+       return false;
+
     const auto hash = mat->File->FilePath->IndexHash;
     auto result = material_cache->find(hash);
     if (result != material_cache->end())
@@ -262,14 +429,27 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
         *out = result->second;
         return true;
     }
-    extract_textures(mat);
+
+    bool found_emissive = false;
+    extract_textures(mat, found_emissive);
     *out = FbxSurfacePhong::Create(scene, std_material_name.c_str());
 
     (*out)->AmbientFactor.Set(1.);
     (*out)->DiffuseFactor.Set(1.);
     (*out)->SpecularFactor.Set(0.3);
+    (*out)->BumpFactor.Set(0.3);
 
     (*out)->ShadingModel.Set("Phong");
+
+    std::map<std::string, std::vector<FbxTexture*>> textures;
+    auto fbx_textures = std::map<std::string, FbxPropertyT<FbxDouble3>*>
+    {
+        {"ambient", &(*out)->Ambient},
+        {"diffuse", &(*out)->Diffuse},
+        {"specular", &(*out)->Specular},
+        {"normal", &(*out)->NormalMap},
+        {"emissive", &(*out)->Emissive}
+    };
 
     for (int i = 0; i < mat->Textures->Length; i++)
     {
@@ -289,32 +469,60 @@ bool ZoneExporter::create_material(Lumina::Models::Materials::Material^ mat, Fbx
         texture->SetScale(1.0, 1.0);
         texture->SetRotation(0.0, 0.0);
 
-        // We are ignoring the 2nd texture that they use for blending
-        switch (mat->Textures[i]->TextureUsageRaw)
+        // We are ignoring the 2nd texture that they use for blending // LIES LIES LIES
+        switch (mat->Textures[i]->TextureUsageSimple)
         {
-            case Lumina::Data::Parsing::TextureUsage::SamplerColorMap0: (*out)->Diffuse.ConnectSrcObject(texture); break;
-            case Lumina::Data::Parsing::TextureUsage::SamplerSpecularMap0: (*out)->Specular.ConnectSrcObject(texture); break;
-            case Lumina::Data::Parsing::TextureUsage::SamplerNormalMap0:
-                (*out)->NormalMap.ConnectSrcObject(texture);
-                break;
-            default: ;
+            case Lumina::Models::Materials::Texture::Usage::Diffuse:  textures["diffuse"].push_back(texture); break;
+            case Lumina::Models::Materials::Texture::Usage::Normal:   textures["normal"].push_back(texture); break;
+            case Lumina::Models::Materials::Texture::Usage::Specular:
+            {
+               textures["specular"].push_back(texture);
+
+               if (found_emissive)
+               {
+                  //(*out)->EmissiveFactor.Set(1.0);
+                  //(*out)->Emissive.Set({ 1.0, 0.373, 0.255 });
+                  //textures["emissive"].push_back(texture);
+               }
+               break;
+            }
+            default: textures["ambient"].push_back(texture);      break;
         }
     }
 
+    // thanks azurerain1
+    for (auto& slot : textures)
+    {
+        if (/*slot.second.size() > 1*/ false)
+        {
+            auto layered_texture = FbxLayeredTexture::Create(scene, (std_material_name + "_layered_texture_group").c_str());
+            for (int i = 0; i < slot.second.size(); ++i)
+            {
+                layered_texture->ConnectSrcObject(slot.second[i]);
+                layered_texture->SetTextureBlendMode(i, FbxLayeredTexture::EBlendMode::eAdditive);
+                layered_texture->SetTextureAlpha(i, 0.5);
+            }
+            fbx_textures[slot.first]->ConnectSrcObject(layered_texture);
+        }
+        else if (!slot.second.empty())
+        {
+            fbx_textures[slot.first]->ConnectSrcObject(slot.second[0]);
+        }
+    }
+
+
     material_cache->insert({hash, *out});
-
-
     return true;
 }
 
-void ZoneExporter::extract_textures(Lumina::Models::Materials::Material^ mat)
+void ZoneExporter::extract_textures(Lumina::Models::Materials::Material^ mat, bool& out_found_emissive)
 {
     // I wish this was a C# function
     for (int i = 0; i < mat->Textures->Length; i++)
     {
         auto tex_path = Util::get_texture_path(out_folder, zone_code, mat->Textures[i]->TexturePath);
 
-        if (System::IO::File::Exists(tex_path))
+        if (System::IO::File::Exists(tex_path) || tex_path->Contains("dummy"))
             continue;
 
         Lumina::Data::Files::TexFile^ texfile;
@@ -326,10 +534,29 @@ void ZoneExporter::extract_textures(Lumina::Models::Materials::Material^ mat)
             arr[i] = texfile->ImageData[i];
 
         System::Drawing::Image^ texture = gcnew System::Drawing::Bitmap(texfile->Header.Width,
-                                                                        texfile->Header.Height,
-                                                                        texfile->Header.Width * 4,
-                                                                        System::Drawing::Imaging::PixelFormat::Format32bppArgb,
-                                                                        System::IntPtr(arr));
+           texfile->Header.Height,
+           texfile->Header.Width * 4,
+           System::Drawing::Imaging::PixelFormat::Format32bppArgb,
+           System::IntPtr(arr));
+
+        if (tex_path->Contains("_s."))
+        {
+           for (int i = 0; i + 4 < texfile->ImageData->Length; i += 4)
+           {
+              uint32_t b = texfile->ImageData[i];
+              uint32_t g = texfile->ImageData[i + 1];
+              uint32_t r = texfile->ImageData[i + 2];
+              uint32_t a = texfile->ImageData[i + 3];
+
+              if (r == 0xFF && (g >= 80 && g < 100) && (b >= 60 && b < 85))
+              {
+                 System::Console::WriteLine("EMISSIVE: {0}", tex_path);
+                 out_found_emissive = true;
+                 break;
+              }
+           }
+        }
+
         System::IO::Directory::CreateDirectory(System::IO::Path::GetDirectoryName(tex_path));
         texture->Save(tex_path, System::Drawing::Imaging::ImageFormat::Png);
         delete[] arr;
@@ -353,6 +580,10 @@ bool ZoneExporter::save_scene()
 bool ZoneExporter::init(System::String^ game_path)
 {
     data = gcnew Lumina::GameData(game_path, gcnew Lumina::LuminaOptions());
+    data->Options->PanicOnSheetChecksumMismatch = false; // probably haraam
+    eobj_sgb_paths = gcnew System::Collections::Generic::Dictionary<System::UInt32, System::String^>();
+    eobj_names = gcnew System::Collections::Generic::Dictionary<System::UInt32, System::String^>();
+
     auto name = zone_path.substr(zone_path.rfind("/level") - 4, 4);
 
     manager = FbxManager::Create();
@@ -373,7 +604,8 @@ bool ZoneExporter::init(System::String^ game_path)
     (*manager->GetIOSettings()).SetBoolProp(EXP_FBX_GOBO, true);
     (*manager->GetIOSettings()).SetBoolProp(EXP_FBX_ANIMATION, false);
     (*manager->GetIOSettings()).SetBoolProp(EXP_FBX_GLOBAL_SETTINGS, true);
-
+    
+    scene->GetGlobalSettings().SetSystemUnit(FbxSystemUnit::m);
     return true;
 }
 
