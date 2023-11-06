@@ -1,3 +1,9 @@
+# ⚠️❗⚠️WARNING WARNING WARNING ⚠️❗⚠️
+## This project is DISCONTINUED. No support will be provided. No bugs will be fixed. No questions will be answered.
+## This is **NOT** due to lack of interest, this is due to a technical limitation.
+## Microsoft has essentially sunset support for C++/CLI past .NET Framework and the XIV development community has moved on from Framework for years now.
+## There is practically no way to continue development on this project in its current state. I will not be rewriting it.
+
 # ZoneFbx
 
 ZoneFbx is a driver program and small C++/CLI library utilizing 
